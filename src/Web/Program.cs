@@ -3,6 +3,12 @@ using System.Security.Authentication;
 
 var builder = WebApplication.CreateBuilder(args);
 
+builder.Services.AddSingleton(sp =>
+{
+    var listener = new MyListener(sp.GetRequiredService<ILogger<MyListener>>());
+    return listener;
+});
+
 var app = builder.Build();
 
 app.Services.GetRequiredService<MyListener>();
@@ -46,10 +52,10 @@ public sealed class MyListener : EventListener
 
     protected override void OnEventSourceCreated(EventSource eventSource)
     {
-        if (eventSource.Name == "System.Net.Http")
-        {
-            EnableEvents(eventSource, EventLevel.Informational);
-        }
+        //if (eventSource.Name == "System.Net.Http")
+        //{
+        //    EnableEvents(eventSource, EventLevel.Informational);
+        //}
 
         if (eventSource.Name == "System.Net.Security")
         {
@@ -59,6 +65,11 @@ public sealed class MyListener : EventListener
 
     protected override void OnEventWritten(EventWrittenEventArgs eventData)
     {
+        if (eventData.EventName != "HandshakeStart" && eventData.EventName != "HandshakeStop")
+        {
+            return;
+        }
+
         for (int i = 0; i < eventData?.Payload?.Count; i++)
         {
             if (eventData?.PayloadNames?[i] == "protocol")

@@ -8,11 +8,18 @@ var listener = new MyListener();
 
 while (true)
 {
-    using var client = new HttpClient();
-    await client.GetStringAsync("https://localhost:7032/weatherforecast");
-    // await client.GetStringAsync("https://google.com");
-    await Task.Delay(TimeSpan.FromSeconds(10));
+    try
+    {
+        // Create a new client so that we get a new connection.
+        using var client = new HttpClient();
+        await client.GetStringAsync("https://localhost:7032/weatherforecast");
+        // await client.GetStringAsync("https://google.com");
+        await Task.Delay(TimeSpan.FromSeconds(10));
 
+    }
+    catch
+    {
+    }
 }
 
 public sealed class MyListener : EventListener
@@ -31,13 +38,19 @@ public sealed class MyListener : EventListener
 
         if (eventSource.Name == "System.Net.Security")
         {
-            EnableEvents(eventSource, EventLevel.Informational);
+            // TODO: Learn how to use the args parameter to filter events.
+            // this will only enable the HandshakeStart and HandshakeStop events.
+            EnableEvents(eventSource, EventLevel.Informational, EventKeywords.None);
+
         }
     }
 
     protected override void OnEventWritten(EventWrittenEventArgs eventData)
     {
-        Console.WriteLine($"{eventData.EventName}");
+        if (eventData.EventName != "HandshakeStart" && eventData.EventName != "HandshakeStop")
+        {
+            return;
+        }
         for (int i = 0; i < eventData?.Payload?.Count; i++)
         {
             if (eventData?.PayloadNames?[i] == "protocol")
