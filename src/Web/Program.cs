@@ -1,7 +1,9 @@
 using System.Collections.ObjectModel;
 using System.Diagnostics.Metrics;
 using System.Diagnostics.Tracing;
-using System.Security.Authentication;
+using System.Text;
+using Microsoft.Azure.Cosmos;
+using Container = Microsoft.Azure.Cosmos.Container;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.WebHost.ConfigureKestrel(options =>
@@ -12,11 +14,29 @@ builder.WebHost.ConfigureKestrel(options =>
     });
 });
 
+builder.Logging.AddEventSourceLogger();
+
+CosmosClient client = new(
+    accountEndpoint: "https://localhost:8081/",
+    authKeyOrResourceToken: "C2y6yDjf5/R+ob0N8A7Cgv30VRDJIWEHLM+4QDU5DE2nQ9nDuVTqobD4b8mGGyPMbIZnqyMsEcaGQy67XIw/Jw==",
+    new CosmosClientOptions
+    {
+        CosmosClientTelemetryOptions = new CosmosClientTelemetryOptions
+        {
+            DisableDistributedTracing = false,
+            CosmosThresholdOptions = new CosmosThresholdOptions
+            {
+                PayloadSizeThresholdInBytes = 0,
+            },
+        }
+    });
+builder.Services.AddSingleton(client);
+
 builder.Services.AddSingleton<MyListener>();
 
 var app = builder.Build();
 
-//var listener = app.Services.GetRequiredService<MyListener>();
+var listener = app.Services.GetRequiredService<MyListener>();
 
 using MeterListener meterListener = new();
 meterListener.InstrumentPublished = (instrument, listener) =>
@@ -28,6 +48,7 @@ meterListener.InstrumentPublished = (instrument, listener) =>
 };
 
 meterListener.SetMeasurementEventCallback<double>(OnMeasurementRecorded);
+
 // Start the meterListener, enabling InstrumentPublished callbacks.
 meterListener.Start();
 
@@ -41,7 +62,7 @@ var summaries = new[]
     "Freezing", "Bracing", "Chilly", "Cool", "Mild", "Warm", "Balmy", "Hot", "Sweltering", "Scorching"
 };
 
-app.MapGet("/weatherforecast", async () =>
+app.MapGet("/weatherforecast", async (CosmosClient client, ILogger<Program> logger) =>
 {
     var forecast = Enumerable.Range(1, 5).Select(index =>
         new WeatherForecast
@@ -50,8 +71,32 @@ app.MapGet("/weatherforecast", async () =>
             Random.Shared.Next(-20, 55),
             summaries[Random.Shared.Next(summaries.Length)]
         ))
-    .Select(o => new { o.TemperatureF, Date = o.Date.ToShortDateString(), o.TemperatureC})
+    .Select(o => new { o.TemperatureF, Date = o.Date.ToShortDateString(), o.TemperatureC })
         .ToArray();
+
+    var item = new
+    {
+        id = $"{DateTimeOffset.UtcNow.Ticks}",
+        name = "Test item"
+    };
+    try
+    {
+        Database database = await client.CreateDatabaseIfNotExistsAsync(
+            id: "cosmicworks",
+            throughput: 400
+        );
+
+        Container container = await database.CreateContainerIfNotExistsAsync(
+            id: "products",
+            partitionKeyPath: "/id"
+        );
+
+        await container.UpsertItemAsync(item);
+    }
+    catch (Exception ex)
+    {
+        logger.LogError(ex, "Error inserting item");
+    }
     return forecast;
 });
 
@@ -62,9 +107,9 @@ static void OnMeasurementRecorded<T>(
         T measurement,
         ReadOnlySpan<KeyValuePair<string, object?>> tags,
         object? state)
-    {
-        Console.WriteLine($"{instrument.Name} recorded measurement {measurement}");
-    }
+{
+    Console.WriteLine($"{instrument.Name} recorded measurement {measurement}");
+}
 
 internal record WeatherForecast(DateOnly Date, int TemperatureC, string? Summary)
 {
@@ -73,47 +118,126 @@ internal record WeatherForecast(DateOnly Date, int TemperatureC, string? Summary
 
 public sealed class MyListener : EventListener
 {
-    private readonly ILogger<MyListener>? _logger;
+    private readonly ILogger<MyListener>? log;
+    const string SystemHttp = "System.Net.Http";
+    const string SystemRuntime = "System.Runtime";
+    const string SystemSecurity = "System.Net.Security";
+    const string SystemSockets = "System.Net.Sockets";
+    const string SystemNameResolution = "System.Net.NameResolution";
+    const string AspNetConnections = "Microsoft.AspNetCore.Http.Connections";
+    const string AspNetKestrel = "Microsoft-AspNetCore-Server-Kestrel";
+    const string AspnetHosting = "Microsoft.AspNetCore.Hosting";
 
-    public MyListener(ILogger<MyListener> logger):base()
+    /// <summary>
+    /// https://github.com/Azure/azure-cosmos-dotnet-v3/blob/504c2dfd8d6dacb77789a5b48c09897899363b55/Microsoft.Azure.Cosmos/src/DocumentClientEventSource.cs#L14
+    /// </summary>
+    const string DocumentDBClient = "DocumentDBClient";
+
+    /// <summary>
+    /// https://github.com/Azure/azure-cosmos-dotnet-v3/blob/504c2dfd8d6dacb77789a5b48c09897899363b55/Microsoft.Azure.Cosmos/src/Telemetry/OpenTelemetry/CosmosDbEventSource.cs#L15
+    /// </summary>
+    const string CosmosRequestDiagnostics = "Azure-Cosmos-Operation-Request-Diagnostics";
+
+    // https://learn.microsoft.com/en-us/dotnet/core/diagnostics/available-counters
+    private static readonly HashSet<string> _enabledEventCounters = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            SystemRuntime,
+            AspNetKestrel,
+            AspnetHosting,
+            AspNetConnections,
+            SystemNameResolution,
+            SystemSockets,
+            SystemSecurity,
+            SystemHttp,
+            DocumentDBClient,
+            CosmosRequestDiagnostics
+
+        };
+
+    public MyListener(ILogger<MyListener> logger) : base()
     {
-        Console.WriteLine($"logger is null ctor {logger is null}");
-        this._logger = logger;
+        this.log = logger;
     }
 
     protected override void OnEventSourceCreated(EventSource eventSource)
     {
-        //if (eventSource.Name == "System.Net.Http")
-        //{
-        //    EnableEvents(eventSource, EventLevel.Informational);
-        //}
-
-        Console.WriteLine($"Enabled {eventSource.Name}");
-        if (eventSource.Name == "Microsoft.AspNetCore.Hosting")
+        if (_enabledEventCounters.Contains(eventSource.Name))
         {
-            Console.WriteLine("Enabled System.Net.Http");
-           EnableEvents(eventSource, EventLevel.Verbose);
+            EnableEvents(eventSource, EventLevel.Verbose);
         }
     }
 
     protected override void OnEventWritten(EventWrittenEventArgs eventData)
     {
-        //if (eventData.EventName == null || !(eventData.EventName.Contains("EventCounters")))
-        //{
-        //    return;
-        //}
-        //var payloadDict = (IDictionary<string, object>?)eventData?.Payload?[0];
-        if (eventData.EventName.Contains("Request") || eventData.EventSource.Name.Contains("Microsoft-AspNetCore-Server-Kestrel"))
+        if (eventData.EventName == "EventCounters" && eventData?.Payload?[0] is IDictionary<string, object> payloadFields && payloadFields != null)
         {
-            for (int i = 0; i < eventData?.Payload?.Count; i++)
+            string counterType = GetCounterPayloadValue<string>("CounterType", payloadFields);
+            double value = 0;
+            if (counterType == "Sum")
             {
-                this._logger?.LogInformation("{Provider}-{EventName}-{Name} - {Value}", eventData.EventSource.Name,eventData.EventName, eventData?.PayloadNames?[i], eventData?.Payload[i]);
+                value = GetCounterPayloadValue<double>("Increment", payloadFields);
             }
+            if (counterType == "Mean")
+            {
+                value = GetCounterPayloadValue<double>("Mean", payloadFields);
+            }
+
+            // log.LogInformation($"EventSource: {eventData.EventSource.Name}, Value: {(long)value}, Payload: {DictionaryToString(payloadFields)}");
+        }
+        else
+        {
+            var message = $"EventSource: {eventData?.EventSource.Name}, EventName: {eventData?.EventName} Payload: {PayloadToString(eventData?.PayloadNames, eventData?.Payload)}";
+            log?.LogInformation(message);
+        }
+    }
+
+    private string PayloadToString(ReadOnlyCollection<string>? payloadNames, ReadOnlyCollection<object?>? payload)
+    {
+        if (payloadNames == null || payload == null)
+        {
+            return string.Empty;
         }
 
-        //if (payloadDict is not null && payloadDict.TryGetValue("Name", out object? name) && name is string theName && (theName.Contains("http11-connections-current-total") || theName.Contains("http20-connections-current-total")))
-        //{
-            
-        //}
+        var sb = new StringBuilder();
+        for (int i = 0; i < payload.Count; i++)
+        {
+            sb.Append($"{payloadNames[i]}: {payload[i]} ");
+        }
+
+        return sb.ToString();
+    }
+
+
+    /// <summary>
+    /// Convert a dictionary to a string.
+    /// </summary>
+    internal static string DictionaryToString(IDictionary<string, object> payloadFields)
+    {
+        return string.Join(", ", payloadFields.Select(kvp => $"{kvp.Key}: {kvp.Value}"));
+    }
+
+
+    /// <summary>
+    /// Get the counter payload value for a given name.
+    /// </summary>
+    /// <typeparam name="T">Output type of the value.</typeparam>
+    /// <param name="name">The name to look up.</param>
+    /// <param name="payloadFields">The payload fields.</param>
+    /// <returns>The value.</returns>
+    internal static T GetCounterPayloadValue<T>(string name, IDictionary<string, object> payloadFields)
+    {
+        object output;
+        try
+        {
+            if (payloadFields.TryGetValue(name, out output!))
+            {
+                return (T)output;
+            }
+        }
+        catch
+        {
+        }
+
+        return default!;
     }
 }

@@ -1,10 +1,13 @@
 ﻿// See https://aka.ms/new-console-template for more information
+using System.Collections.ObjectModel;
 using System.Diagnostics.Tracing;
-using System.Security.Authentication;
+using System.Text;
+using Microsoft.Extensions.Logging;
 
 Console.WriteLine("Hello, World!");
 
-var listener = new MyListener();
+ILogger log = LoggerFactory.Create(builder => builder.AddConsole()).CreateLogger("Program");
+var listener = new MyListener(log);
 
 long count = 0;
 DateTimeOffset now = DateTimeOffset.UtcNow;
@@ -43,30 +46,120 @@ Console.ReadLine();
 
 public sealed class MyListener : EventListener
 {
+    const string SystemHttp = "System.Net.Http";
+    const string SystemRuntime = "System.Runtime";
+    const string SystemSecurity = "System.Net.Security";
+    const string SystemSockets = "System.Net.Sockets";
+    const string SystemNameResolution = "System.Net.NameResolution";
+    const string AspNetConnections = "Microsoft.AspNetCore.Http.Connections";
+    const string AspNetKestrel = "Microsoft-AspNetCore-Server-Kestrel";
+    const string AspnetHosting = "Microsoft.AspNetCore.Hosting";
 
-    public MyListener()
+    // https://learn.microsoft.com/en-us/dotnet/core/diagnostics/available-counters
+    private static readonly HashSet<string> _enabledEventCounters = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            SystemRuntime,
+            AspNetKestrel,
+            AspnetHosting,
+            AspNetConnections,
+            SystemNameResolution,
+            SystemSockets,
+            SystemSecurity,
+            SystemHttp,
+            DocDBTrace
+        };
+
+    /// <summary>
+    /// Cosmos Db Trace Event Source
+    /// https://github.com/Azure/azure-cosmos-dotnet-v2/blob/49c80a7522990d16ffa34207e6fd3d0b36715400/docs/documentdb-sdk_capture_etl.md?plain=1#L2
+    /// </summary>
+    const string DocDBTrace = "DocDBTrace ";
+
+    private readonly ILogger log;
+
+    public MyListener(ILogger log)
     {
+        this.log = log;
     }
 
     protected override void OnEventSourceCreated(EventSource eventSource)
     {
-        if (eventSource.Name == "System.Net.Http")
+        if (_enabledEventCounters.Contains(eventSource.Name))
         {
-            EnableEvents(eventSource, EventLevel.Informational);
+            EnableEvents(eventSource, EventLevel.Verbose);
         }
     }
 
     protected override void OnEventWritten(EventWrittenEventArgs eventData)
     {
-        if (eventData.EventName == "ConnectionEstablished")
+        if (eventData.EventName == "EventCounters")
         {
-
-            for (int i = 0; i < eventData?.Payload?.Count; i++)
+            IDictionary<string, object> payloadFields = (IDictionary<string, object>)eventData.Payload[0];
+            string counterType = GetCounterPayloadValue<string>("CounterType", payloadFields);
+            double value = 0;
+            if (counterType == "Sum")
             {
-                var value = eventData.Payload[i];
-                var name = eventData?.PayloadNames?[i];
-                Console.WriteLine($"{name} - {value}");
+                value = GetCounterPayloadValue<double>("Increment", payloadFields);
+            }
+            if (counterType == "Mean")
+            {
+                value = GetCounterPayloadValue<double>("Mean", payloadFields);
+            }
+
+            // log.LogInformation($"EventSource: {eventData.EventSource.Name}, Value: {(long)value}, Payload: {DictionaryToString(payloadFields)}");
+        }
+        else
+        {
+            log?.LogInformation($"EventSource: {eventData.EventSource.Name}, EventName: {eventData.EventName} Payload: {PayloadToString(eventData.PayloadNames, eventData.Payload)}");
+        }
+    }
+
+    /// <summary>
+    /// Convert a dictionary to a string.
+    /// </summary>
+    internal static string DictionaryToString(IDictionary<string, object> payloadFields)
+    {
+        return string.Join(", ", payloadFields.Select(kvp => $"{kvp.Key}: {kvp.Value}"));
+    }
+
+    private string PayloadToString(ReadOnlyCollection<string>? payloadNames, ReadOnlyCollection<object?> payload)
+    {
+        if (payloadNames == null || payload == null)
+        {
+            return string.Empty;
+        }
+
+        var sb = new StringBuilder();
+        for (int i = 0; i < payload.Count; i++)
+        {
+            sb.Append($"{payloadNames[i]}: {payload[i]} ");
+        }
+
+        return sb.ToString();
+    }
+
+
+    /// <summary>
+    /// Get the counter payload value for a given name.
+    /// </summary>
+    /// <typeparam name="T">Output type of the value.</typeparam>
+    /// <param name="name">The name to look up.</param>
+    /// <param name="payloadFields">The payload fields.</param>
+    /// <returns>The value.</returns>
+    internal static T GetCounterPayloadValue<T>(string name, IDictionary<string, object> payloadFields)
+    {
+        object output;
+        try
+        {
+            if (payloadFields.TryGetValue(name, out output!))
+            {
+                return (T)output;
             }
         }
+        catch
+        {
+        }
+
+        return default!;
     }
 }
