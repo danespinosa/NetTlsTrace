@@ -15,12 +15,12 @@ var oneMinute = TimeSpan.FromSeconds(10);
 //using var client = new HttpClient();
 
 var uri = new Uri("https://bing.com");
-while (count <=20 )
+while (count <= 20)
 {
     try
     {
-        
-         using var client = new HttpClient(new SocketsHttpHandler() {  });
+
+        using var client = new HttpClient(new SocketsHttpHandler() { });
         // Create a new client so that we get a new connection.
         Console.WriteLine($"making request to {uri}");
         using var request = new HttpRequestMessage(HttpMethod.Get, uri);
@@ -28,14 +28,14 @@ while (count <=20 )
         //var request = new HttpRequestMessage(HttpMethod.Get, "https://bing.com");
         request.Headers.ConnectionClose = true;
         var response = await client.SendAsync(request);
-         //var response = await client.GetAsync(uri);
+        //var response = await client.GetAsync(uri);
         var content = await response.Content.ReadAsStringAsync();
         // await client.GetStringAsync("https://google.com");
         await Task.Delay(TimeSpan.FromSeconds(1));
         Console.WriteLine($"Request {count++} started");
 
     }
-    catch(Exception ex)
+    catch (Exception ex)
     {
 
     }
@@ -53,6 +53,9 @@ public sealed class MyListener : EventListener
         {
             SystemHttp,
         };
+
+    private static object _counterLock = new object();
+    private int _counter = 0;
 
     /// <summary>
     /// Cosmos Db Trace Event Source
@@ -96,6 +99,25 @@ public sealed class MyListener : EventListener
         else
         {
             log?.LogInformation($"EventSource: {eventData.EventSource.Name}, EventName: {eventData.EventName} Payload: {PayloadToString(eventData.PayloadNames, eventData.Payload)}");
+            if (eventData.EventName == "ConnectionEstablished" || eventData.EventName == "ConnectionClosed")
+            {
+                if (eventData.EventName == "ConnectionEstablished")
+                {
+                    lock (_counterLock)
+                    {
+                        _counter++;
+                    }
+                }
+                else if (eventData.EventName == "ConnectionClosed")
+                {
+                    lock (_counterLock)
+                    {
+                        _counter--;
+                    }
+                }
+
+                log?.LogInformation("Connection count: {0}", _counter);
+            }
         }
     }
 
