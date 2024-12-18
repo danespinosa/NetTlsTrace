@@ -13,9 +13,9 @@ long count = 0;
 DateTimeOffset now = DateTimeOffset.UtcNow;
 var oneMinute = TimeSpan.FromSeconds(10);
 //using var client = new HttpClient();
-var uri = new Uri("https://localhost:7032/weatherforecast");
-//var uri = new Uri("https://bing.com");
-while (count <=100000 )
+
+var uri = new Uri("https://bing.com");
+while (count <=20 )
 {
     try
     {
@@ -47,26 +47,11 @@ Console.ReadLine();
 public sealed class MyListener : EventListener
 {
     const string SystemHttp = "System.Net.Http";
-    const string SystemRuntime = "System.Runtime";
-    const string SystemSecurity = "System.Net.Security";
-    const string SystemSockets = "System.Net.Sockets";
-    const string SystemNameResolution = "System.Net.NameResolution";
-    const string AspNetConnections = "Microsoft.AspNetCore.Http.Connections";
-    const string AspNetKestrel = "Microsoft-AspNetCore-Server-Kestrel";
-    const string AspnetHosting = "Microsoft.AspNetCore.Hosting";
 
     // https://learn.microsoft.com/en-us/dotnet/core/diagnostics/available-counters
     private static readonly HashSet<string> _enabledEventCounters = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
-            SystemRuntime,
-            AspNetKestrel,
-            AspnetHosting,
-            AspNetConnections,
-            SystemNameResolution,
-            SystemSockets,
-            SystemSecurity,
             SystemHttp,
-            DocDBTrace
         };
 
     /// <summary>
