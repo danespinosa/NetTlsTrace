@@ -2,6 +2,8 @@ using System.Collections.ObjectModel;
 using System.Diagnostics.Metrics;
 using System.Diagnostics.Tracing;
 using System.Text;
+using Azure.Core;
+using Azure.Identity;
 using Microsoft.Azure.Cosmos;
 using Container = Microsoft.Azure.Cosmos.Container;
 
@@ -16,6 +18,7 @@ builder.WebHost.ConfigureKestrel(options =>
 
 builder.Logging.AddEventSourceLogger();
 
+// Install cosmos db emulator for this to work
 CosmosClient client = new(
     accountEndpoint: "https://localhost:8081/",
     authKeyOrResourceToken: "C2y6yDjf5/R+ob0N8A7Cgv30VRDJIWEHLM+4QDU5DE2nQ9nDuVTqobD4b8mGGyPMbIZnqyMsEcaGQy67XIw/Jw==",
@@ -74,6 +77,13 @@ app.MapGet("/weatherforecast", async (CosmosClient client, ILogger<Program> logg
     .Select(o => new { o.TemperatureF, Date = o.Date.ToShortDateString(), o.TemperatureC })
         .ToArray();
 
+    var options = new DefaultAzureCredentialOptions
+    {
+    };
+    // options.Diagnostics.IsLoggingContentEnabled = true;
+    DefaultAzureCredential defaultAzureCredential = new DefaultAzureCredential();
+    defaultAzureCredential.GetToken(new TokenRequestContext(new[] { "https://cosmos.azure.com/.default" }), default);
+
     var item = new
     {
         id = $"{DateTimeOffset.UtcNow.Ticks}",
@@ -127,6 +137,7 @@ public sealed class MyListener : EventListener
     const string AspNetConnections = "Microsoft.AspNetCore.Http.Connections";
     const string AspNetKestrel = "Microsoft-AspNetCore-Server-Kestrel";
     const string AspnetHosting = "Microsoft.AspNetCore.Hosting";
+    const string AzureIdentity = "Azure-Identity";
 
     /// <summary>
     /// https://github.com/Azure/azure-cosmos-dotnet-v3/blob/504c2dfd8d6dacb77789a5b48c09897899363b55/Microsoft.Azure.Cosmos/src/DocumentClientEventSource.cs#L14
@@ -150,8 +161,8 @@ public sealed class MyListener : EventListener
             SystemSecurity,
             SystemHttp,
             DocumentDBClient,
-            CosmosRequestDiagnostics
-
+            CosmosRequestDiagnostics,
+            AzureIdentity
         };
 
     public MyListener(ILogger<MyListener> logger) : base()
